@@ -1,0 +1,44 @@
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+test_env/.venv/
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Environment / secrets
+.env
+.env.*
+*.env.local
+
+# IDE / editor settings
+.vscode/
+.idea/
+*.code-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# OpenEnv / experiment outputs (optional, keep if large or generated)
+outputs/
+.agents/
+.history/
+.lock

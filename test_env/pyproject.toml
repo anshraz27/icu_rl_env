@@ -1,0 +1,9 @@
+[project]
+name = "icu-env"
+version = "1.0.0"
+dependencies = [
+    "openenv",
+    "fastapi",
+    "uvicorn",
+    "pydantic"
+]

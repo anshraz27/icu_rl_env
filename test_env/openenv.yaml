@@ -1,0 +1,3 @@
+name: "icu-env"
+version: "1.0.0"
+description: "ICU Bed Allocation RL Environment"
