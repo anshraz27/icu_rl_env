@@ -16,7 +16,7 @@ from openenv.core.env_server import create_fastapi_app
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models2 import (  # type: ignore
-	ICUAction,
+	ICUActionRouter,
 	ICUObservation,
 	PatientState,
 	BedState,
@@ -30,7 +30,7 @@ from server.env2 import ICUEnvironment  # type: ignore
 # ---------------- AUTO ENV ROUTES ----------------
 # This creates /reset, /step, /state, /health, /docs
 
-app = create_fastapi_app(ICUEnvironment, ICUAction, ICUObservation)
+app = create_fastapi_app(ICUEnvironment, ICUActionRouter, ICUObservation)
 
 
 # ---------------- ROOT ----------------
@@ -255,7 +255,7 @@ def run_grader(steps: int = 100):
 
 		empty_beds = _list_empty_beds(wards)
 
-		action: ICUAction
+		action: ICUActionRouter
 
 		# Randomly assign if there is someone waiting and free beds
 		if unassigned and empty_beds:
@@ -283,14 +283,14 @@ def run_grader(steps: int = 100):
 		obs = env.step(action)
 		total_reward += obs.reward
 
-	score = float(obs.metadata.get("score", 0.0) or 0.0)
+	score = float(obs.score)
 
 	return JSONResponse(
 		content={
 			"score": score,
 			"total_reward": total_reward,
-			"steps": int(obs.metadata.get("step", 0)),
-			"fatal_errors": int(obs.metadata.get("fatal_errors", 0)),
+			"steps": obs.step,
+			"fatal_errors": obs.fatal_errors,
 			"feedback": obs.feedback,
 		}
 	)
@@ -321,7 +321,7 @@ def run_baseline():
 
 		empty_beds = _list_empty_beds(wards)
 
-		action: ICUAction | None = None
+		action: ICUActionRouter 
 
 		# 1) Try to find a feasible assignment first
 		if unassigned and empty_beds:
@@ -365,15 +365,15 @@ def run_baseline():
 		obs = env.step(action)
 		total_reward += obs.reward
 
-	score = float(obs.metadata.get("score", 0.0) or 0.0)
+	score = float(obs.score)
 
 	return JSONResponse(
 		content={
 			"baseline_agent": "v2_heuristic (feasible bed first, then safe step-down)",
 			"score": score,
 			"total_reward": total_reward,
-			"steps": int(obs.metadata.get("step", 0)),
-			"fatal_errors": int(obs.metadata.get("fatal_errors", 0)),
+			"steps": obs.step,
+			"fatal_errors": obs.fatal_errors,
 			"feedback": obs.feedback,
 		}
 	)
