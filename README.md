@@ -1,381 +1,289 @@
-# Building Your Own Environment
-
-This guide shows you how to create a custom environment using the EnvTorch framework.
-
-## Overview
-
-Creating an environment involves five main steps:
-1. Define your models (Action, Observation, State)
-2. Implement the environment APIs: step, reset, state
-3. Create the FastAPI server
-4. Build a Docker image and push it to a public docker repo for community to access it
-5. Subclass HTTPEnvclient and implement the parsing methods for result and state.
-
-## Step-by-Step Guide
-
-### 1. Define Models
-
-Create your action, observation, and state models using Python dataclasses:
-
-```python
-# models.py
-from dataclasses import dataclass
-from openenv.core.env_server import Action, Observation, State
-
-@dataclass
-class MyAction(Action):
-    """Your custom action."""
-    command: str
-    parameters: dict
-
-@dataclass
-class MyObservation(Observation):
-    """Your custom observation."""
-    result: str
-    success: bool
-
-@dataclass
-class MyState(State):
-    """Custom state fields."""
-    custom_field: int = 0
-```
-
-### 2. Implement Environment
-
-Implement the three core methods: `reset()`, `step()`, and `state`:
-
-```python
-# server/my_environment.py
-import uuid
-from openenv.core.env_server import Environment
-from ..models import MyAction, MyObservation, MyState
-
-class MyEnvironment(Environment):
-    def __init__(self):
-        super().__init__()
-        self._state = MyState()
-
-    def reset(self) -> MyObservation:
-        self._state = MyState(episode_id=str(uuid.uuid4()))
-        return MyObservation(result="Ready", success=True)
-
-    def step(self, action: MyAction) -> MyObservation:
-        # Implement your logic here
-        self._state.step_count += 1
-        result = self._execute_command(action.command)
-        return MyObservation(result=result, success=True)
-
-    @property
-    def state(self) -> MyState:
-        return self._state
-```
-
-### 3. Create FastAPI Server
-
-Use the `create_fastapi_app` helper to create your HTTP server:
-
-```python
-# server/app.py
-from openenv.core.env_server import create_fastapi_app
-from ..models import MyAction, MyObservation
-from .my_environment import MyEnvironment
-
-env = MyEnvironment()
-app = create_fastapi_app(env, MyAction, MyObservation)
-```
-
-### 4. Define Dependencies
-
-**For Python-only dependencies (most common case):**
-
-Create `envs/my_env/server/requirements.txt`:
-```txt
-your-package>=1.0.0
-another-package
-```
-
-**For complex setup (optional, only if needed):**
-
-If you need additional setup beyond pip install, create `envs/my_env/server/install_deps.sh`:
-```bash
-#!/bin/bash
-set -e
-
-# Install Python dependencies
-pip install --no-cache-dir -r /tmp/requirements.txt
-
-# Additional setup commands (only if needed)
-mkdir -p /some/directory
-# ... other setup steps
-```
-
-### 5. Create Dockerfile
-
-Build your Docker image from the openenv-base. Place this at `envs/my_env/server/Dockerfile`:
-
-**Simple case (just requirements.txt):**
-```dockerfile
-# Accept base image as build argument for CI/CD flexibility
-ARG BASE_IMAGE=openenv-base:latest
-FROM ${BASE_IMAGE}
-
-# Install dependencies
-COPY envs/my_env/server/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
-
-# Copy environment code
-COPY src/openenv/core/ /app/src/openenv/core/
-COPY envs/my_env/ /app/envs/my_env/
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run server
-CMD ["uvicorn", "envs.my_env.server.app:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-**Complex case (requirements.txt + install_deps.sh):**
-```dockerfile
-ARG BASE_IMAGE=openenv-base:latest
-FROM ${BASE_IMAGE}
-
-# Install dependencies and run setup
-COPY envs/my_env/server/requirements.txt /tmp/requirements.txt
-COPY envs/my_env/server/install_deps.sh /tmp/install_deps.sh
-RUN chmod +x /tmp/install_deps.sh && \
-    /tmp/install_deps.sh && \
-    rm /tmp/install_deps.sh /tmp/requirements.txt
-
-# Copy environment code
-COPY src/openenv/core/ /app/src/openenv/core/
-COPY envs/my_env/ /app/envs/my_env/
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run server
-CMD ["uvicorn", "envs.my_env.server.app:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### 5. Update GitHub Actions Workflow
-
-**Important**: To enable automatic Docker image builds on GitHub, add your environment to the workflow matrix.
-
-Edit `.github/workflows/docker-build.yml` and add your environment to the matrix:
-
-```yaml
-strategy:
-  matrix:
-    image:
-      - name: echo-env
-        dockerfile: envs/echo_env/server/Dockerfile
-      - name: chat-env
-        dockerfile: envs/chat_env/server/Dockerfile
-      - name: coding-env
-        dockerfile: envs/coding_env/server/Dockerfile
-      - name: my-env  # Add your environment here
-        dockerfile: envs/my_env/server/Dockerfile
-```
-
-Once added, every push to `main` will automatically:
-- Build your Docker image
-- Push it to GitHub Container Registry as `ghcr.io/YOUR_USERNAME/openenv-my-env:latest`
-
-### 6. Implement Client
-
-Create a client that extends `EnvClient`:
-
-```python
-# client.py
-from openenv.core import EnvClient, StepResult
-from .models import MyAction, MyObservation, MyState
-
-class MyEnv(EnvClient[MyAction, MyObservation, MyState]):
-    def _step_payload(self, action: MyAction) -> dict:
-        return {"command": action.command, "parameters": action.parameters}
-
-    def _parse_result(self, payload: dict) -> StepResult[MyObservation]:
-        obs = MyObservation(**payload["observation"])
-        return StepResult(
-            observation=obs,
-            reward=payload.get("reward"),
-            done=payload.get("done", False),
-        )
-
-    def _parse_state(self, payload: dict) -> MyState:
-        return MyState(**payload)
-```
-
-## Building and Using Your Environment
-
-### Build Docker Images
-
-```bash
-# First, build the base image (if not already built)
-docker build -t openenv-base:latest -f src/openenv/core/containers/images/Dockerfile .
-
-# Then build your environment image
-docker build -t my-env:latest -f envs/my_env/server/Dockerfile .
-```
-
-### Use Your Environment
-
-```python
-from envs.my_env import MyAction, MyEnv
-
-# Create environment from Docker image
-client = MyEnv.from_docker_image("my-env:latest")
-
-# Reset
-result = client.reset()
-print(result.observation.result)  # "Ready"
-
-# Execute actions
-result = client.step(MyAction(command="test", parameters={}))
-print(result.observation.result)
-print(result.observation.success)
-
-# Get state
-state = client.state()
-print(state.episode_id)
-print(state.step_count)
-
-# Cleanup
-client.close()
-```
-
-## Project Structure
-
-Organize your environment following this structure:
-
-```
 envs/my_env/
-├── __init__.py           # Export MyAction, MyObservation, MyState, MyEnv
-├── models.py             # Action, Observation, State definitions
-├── client.py             # MyEnv client implementation
-├── README.md             # Environment documentation
-└── server/
-    ├── __init__.py
-    ├── my_environment.py # Environment logic
-    ├── app.py            # FastAPI application
-    └── Dockerfile        # Docker image definition
+
+# ICU Bed Allocation RL Environment
+
+This repository implements a small ICU bed allocation environment on top of OpenEnv.
+It includes:
+
+- A structured environment with ICU-specific patient and bed logic.
+- An HTTP server exposing the environment via FastAPI.
+- Stand‑alone graders / baselines for quick evaluation.
+
+The new environment and server you will most often use are:
+
+- Environment logic: [test_env/server/env2.py](test_env/server/env2.py)
+- Pydantic models: [test_env/models2.py](test_env/models2.py)
+- FastAPI app (v2): [test_env/server/app2.py](test_env/server/app2.py)
+- Python grader v2: [test_env/grader_v2.py](test_env/grader_v2.py)
+
+---
+
+## Environment v2: ICUEnvironment
+
+The v2 environment in [test_env/server/env2.py](test_env/server/env2.py) exposes ICU‑style triage dynamics.
+
+### Core methods
+
+- `reset()`
+  - Resets episode time, reward and error counters.
+  - Seeds a small waiting queue of patients (`PT-01` .. `PT-03`).
+  - Seeds one stable ICU patient (`PT-04`) already occupying bed `S4`.
+  - Defines one ward (`Standard ICU`) with four beds (`S1`..`S4`) with different capabilities.
+  - Returns an `ICUObservation` (see below).
+
+- `step(action: ICUAction)`
+  - Increments `time`.
+  - Applies a small queue penalty: `-0.02 * len(unassigned_patients)`.
+  - Every 3 steps, waiting patients may deteriorate (GCS decreases by 1 down to 3).
+  - Active ICU patients accrue `days_in_icu`.
+  - Supports two action types:
+    - `ASSIGN_BED` → handled by `_assign(AssignBedAction)`.
+    - `STEP_DOWN` → handled by `_step_down(StepDownAction)`.
+  - If a clinical constraint is violated, raises an exception which is converted into:
+    - `reward -= 0.5`, `fatal_errors += 1`, `done = True`, and an error `feedback`.
+  - If all patients are assigned and `fatal_errors == 0`, adds a +1.0 success bonus and ends the episode.
+  - If `time >= max_steps` (default 20), ends the episode as a failure.
+  - Returns a new `ICUObservation`.
+
+- `state` (property)
+  - Returns a Python `dict` with the underlying simulator state:
+    - `"unassigned_patients"`: `List[PatientState]`
+    - `"active_patients"`: `Dict[str, PatientState]`
+    - `"wards"`: `List[WardState]`
+
+### Models
+
+All models used by v2 live in [test_env/models2.py](test_env/models2.py).
+
+- `PatientState`
+  - `patient_id: str`
+  - `age: int`
+  - `gcs_score: int`
+  - `needs_ventilator: bool`
+  - `is_infectious: bool`
+  - `has_severe_head_injury: bool`
+  - `has_paralysis: bool`
+  - `days_in_icu: int`
+
+- `BedState`
+  - `bed_id: str`
+  - `has_ventilator: bool`
+  - `is_negative_pressure: bool`
+  - `has_specialized_mattress: bool`
+  - `current_occupant_id: Optional[str]`
+
+- `WardState`
+  - `ward_name: str`
+  - `beds: List[BedState]`
+
+- Actions (`ICUAction` is a union of):
+  - `AssignBedAction`
+    - `action_type = "ASSIGN_BED"`
+    - `patient_id: str`
+    - `bed_id: str`
+  - `StepDownAction`
+    - `action_type = "STEP_DOWN"`
+    - `patient_id: str`
+
+- `ICUObservation`
+  - `hospital_summary: str` – human‑friendly text listing empty beds.
+  - `unassigned_patients: List[PatientState]` – current waiting queue.
+  - `feedback: str` – textual feedback for the last action.
+  - `reward: float` – scalar reward for the last transition.
+  - `done: bool` – episode termination flag.
+  - `metadata: dict` – extra signals, including:
+    - `"score"`: bounded episode‑level score in `[0, 1]`.
+    - `"step"`: current time step.
+    - `"fatal_errors"`: number of fatal clinical errors.
+
+---
+
+## FastAPI Server (app2.py)
+
+The v2 HTTP API is implemented in [test_env/server/app2.py](test_env/server/app2.py).
+
+It uses `create_fastapi_app(ICUEnvironment, ICUAction, ICUObservation)` to expose
+the standard OpenEnv endpoints and adds several competition‑style routes.
+
+### Core endpoints
+
+These are created automatically by `create_fastapi_app`:
+
+- `GET /health`
+  - Liveness probe; returns a simple JSON payload when the server is healthy.
+
+- `POST /reset`
+  - Body: empty JSON `{}`.
+  - Effect: calls `ICUEnvironment.reset()` and returns the initial `ICUObservation`.
+
+- `POST /step`
+  - Body: an `ICUAction` JSON document, e.g.:
+
+    ```json
+    {
+      "action_type": "ASSIGN_BED",
+      "patient_id": "PT-01",
+      "bed_id": "S1"
+    }
+    ```
+
+    or
+
+    ```json
+    {
+      "action_type": "STEP_DOWN",
+      "patient_id": "PT-04"
+    }
+    ```
+
+  - Effect: advances the environment one step and returns the new observation.
+
+- `GET /state`
+  - Returns a JSON view of `env.state` (unassigned patients, active patients, wards).
+
+- `/docs`
+  - Swagger / OpenAPI UI built by FastAPI.
+
+### Additional endpoints in app2
+
+- `GET /`
+  - Summary of the v2 environment and a list of important endpoints (`/health`, `/docs`, `/tasks`, `/grader`, `/baseline`, `/web`).
+
+- `GET /web`
+  - Lightweight HTML UI for manual testing:
+    - Buttons for `/health`, `/reset`, `/state`, `/tasks`, `/grader`, `/baseline`.
+    - A textarea to send arbitrary `ICUAction` JSON to `/step`.
+
+- `GET /tasks`
+  - Returns a small JSON description of the available task and the action schema
+    (how to format `ASSIGN_BED` and `STEP_DOWN` requests).
+
+- `POST /grader?steps=N`
+  - Runs a **random baseline** policy for up to `N` steps:
+    - Randomly assigns waiting patients to empty beds.
+    - Otherwise randomly steps down stable ICU patients.
+  - Response JSON includes:
+    - `score`, `total_reward`, `steps`, `fatal_errors`, `feedback`.
+
+- `GET /baseline`
+  - Runs a more **heuristic baseline** policy that:
+    - Tries to assign patients only to clinically feasible beds.
+    - Falls back to safe step‑down of long‑stay stable patients.
+  - Response JSON includes the same metrics plus a `baseline_agent` label.
+
+The `main()` function in app2 starts the server with Uvicorn on port `8001`:
+
+- `uvicorn.run("server.app2:app", host="0.0.0.0", port=8001, workers=1)`.
+
+---
+
+## Grader v2 (Python, no HTTP)
+
+The file [test_env/grader_v2.py](test_env/grader_v2.py) runs the environment
+directly in‑process, without going through HTTP.
+
+- It imports `ICUEnvironment` from `test_env.server.env2` and the v2 models.
+- Defines a `Policy` protocol with `act(env, obs) -> Optional[ICUAction]`.
+- Provides two baseline policies:
+  - `RandomAssignPolicy`: random feasible assignments, then random safe step‑downs.
+  - `HeuristicSafePolicy`: constraint‑aware assignment and safe step‑down.
+- The `run_episode` helper:
+  - Calls `env.reset()`, loops over `policy.act(env, obs)` and `env.step(action)`.
+  - Accumulates `total_reward` and stops on `done`, max steps, or when the policy returns `None`.
+  - Returns `(score, total_reward, steps, fatal_errors)` from observation metadata.
+- The `evaluate` function:
+  - Runs multiple episodes and prints averages for score, reward, episode length, and fatal errors.
+
+Running the script directly executes both policies and prints a small report.
+
+---
+
+## Setup Instructions
+
+You need Python 3.11+ and a virtual environment.
+
+From the repository root:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate  # on Windows
+
+pip install -r requirements.txt
 ```
 
-## Example Environments
+This installs FastAPI, Uvicorn, Pydantic, OpenEnv and related dependencies
+used by the environment and server.
 
-Study these examples to see the patterns in action:
+---
 
-### Echo Environment
-Location: `envs/echo_env/`
+## Running the v2 FastAPI Server (env2 + app2)
 
-A minimal environment that echoes messages back. Great for:
-- Learning the basics
-- Testing infrastructure
-- Reference implementation
+1. **Activate the virtualenv and install deps** (see above).
 
-See: [`echo_env/README.md`](echo_env/README.md)
+2. **Start the server** from the `test_env` folder:
 
-### Coding Environment
-Location: `envs/coding_env/`
+   ```bash
+   cd test_env
+   python -m server.app2
+   ```
 
-Executes Python code in a sandboxed environment. Demonstrates:
-- Complex environment logic
-- Error handling
-- External tool integration (smolagents)
+   This will start Uvicorn on `http://localhost:8001` using `server/app2.py`.
 
-See: [`coding_env/README.md`](coding_env/README.md)
+3. **Explore the API**:
+   - Open the docs: `http://localhost:8001/docs`
+   - Use the web UI: `http://localhost:8001/web`
 
-## Best Practices
+4. **Example HTTP calls** (from another terminal):
 
-### 1. Type Safety
-Always use typed dataclasses for actions, observations, and state:
-```python
-@dataclass
-class MyAction(Action):
-    command: str  # Use explicit types
-    count: int = 0  # Provide defaults when appropriate
-```
+   ```bash
+   # Reset the environment
+   curl -X POST http://localhost:8001/reset
 
-### 2. Error Handling
-Handle errors gracefully in your environment:
-```python
-def step(self, action: MyAction) -> MyObservation:
-    try:
-        result = self._process(action)
-        return MyObservation(result=result, success=True)
-    except Exception as e:
-        return MyObservation(result="", success=False, error=str(e))
-```
+   # Assign patient PT-01 to ventilator bed S1
+   curl -X POST http://localhost:8001/step \
+              -H "Content-Type: application/json" \
+              -d "{\"action_type\": \"ASSIGN_BED\", \"patient_id\": \"PT-01\", \"bed_id\": \"S1\"}"
 
-### 3. State Management
-Track all relevant episode state:
-```python
-@dataclass
-class MyState(State):
-    # Add custom fields
-    accumulated_reward: float = 0.0
-    last_action: str = ""
-```
+   # Step-down stable patient PT-04
+   curl -X POST http://localhost:8001/step \
+              -H "Content-Type: application/json" \
+              -d "{\"action_type\": \"STEP_DOWN\", \"patient_id\": \"PT-04\"}"
 
-### 4. Documentation
-Provide comprehensive README for your environment:
-- Overview and purpose
-- Quick start example
-- Action/Observation specifications
-- Build instructions
-- Usage examples
+   # Inspect simulator state
+   curl http://localhost:8001/state
 
-### 5. Testing
-Test your environment before containerization:
-```python
-# test_my_environment.py
-from envs.my_env.server.my_environment import MyEnvironment
-from envs.my_env.models import MyAction
+   # Run the random grader for 50 steps
+   curl -X POST "http://localhost:8001/grader?steps=50"
 
-def test_environment():
-    env = MyEnvironment()
+   # Run the heuristic baseline
+   curl http://localhost:8001/baseline
+   ```
 
-    # Test reset
-    obs = env.reset()
-    assert obs.success
+---
 
-    # Test step
-    action = MyAction(command="test", parameters={})
-    obs = env.step(action)
-    assert obs.success
+## Running grader_v2 (direct Python evaluation)
 
-    # Test state
-    assert env.state.step_count == 1
-```
+You can also evaluate the environment without HTTP using
+[test_env/grader_v2.py](test_env/grader_v2.py).
 
-## Advanced Topics
+1. **Activate the virtualenv and install deps** (same as above).
 
-### Custom Transforms
-Apply transformations to observations:
+2. **Run the grader from the repo root**:
 
-```python
-from openenv.core.env_server import Transform
+   ```bash
+   python test_env/grader_v2.py
+   ```
 
-class MyTransform(Transform):
-    def __call__(self, observation: Observation) -> Observation:
-        # Transform observation
-        return modified_observation
+   or, using module syntax:
 
-# Use in environment
-env = MyEnvironment(transform=MyTransform())
-```
+   ```bash
+   python -m test_env.grader_v2
+   ```
 
-### Additional Dependencies
-Install environment-specific packages in Dockerfile:
+3. The script will:
+   - Run `RandomAssignPolicy` for several episodes.
+   - Run `HeuristicSafePolicy` for several episodes.
+   - Print average score, reward, episode length, and fatal error count.
 
-```dockerfile
-FROM openenv-base:latest
-
-# Install specific versions
-RUN pip install --no-cache-dir \
-    numpy==1.24.0 \
-    pandas==2.0.0 \
-    your-custom-package==1.0.0
-```
+This is a convenient way to iterate on the environment logic locally
+before wiring it into larger RL agents or hosting it via the HTTP API.
