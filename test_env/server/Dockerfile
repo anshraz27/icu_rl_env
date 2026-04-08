@@ -1,10 +1,8 @@
 FROM python:3.10-slim
-
 # HF Spaces heavily recommends a non-root user (UID 1000)
 RUN useradd -m -u 1000 user
 USER user
 ENV PATH="/home/user/.local/bin:$PATH"
-
 WORKDIR /app
 
 # Copy files with user ownership
@@ -12,10 +10,17 @@ COPY --chown=user:user . .
 
 # Install dependencies directly (matching local requirements)
 RUN pip install --upgrade pip --no-cache-dir \
-	&& pip install --no-cache-dir openenv-core fastapi uvicorn pydantic
+	&& pip install --no-cache-dir openenv-core fastapi uvicorn pydantic python-dotenv
 
 # Hugging Face Spaces routes traffic specifically to 7860
 EXPOSE 7860
+
+# Set Python path to project root
+ENV PYTHONPATH="/app"
+
+# Healthcheck every 10 seconds
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')" || exit 1
 
 # Point to HF port and correct python module path from root
 # In the built container, the code lives directly under /app with

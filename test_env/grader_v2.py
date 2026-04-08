@@ -25,7 +25,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from test_env.server.env2 import ICUEnvironment
-from test_env.models2 import (
+from test_env.models import (
     ICUAction,
     ICUObservation,
     PatientState,
@@ -188,8 +188,8 @@ def run_episode(
         steps += 1
 
     # Primary signal: score from metadata (as designed in env2)
-    score = float(obs.metadata.get("score", 0.0) or 0.0)
-    fatal_errors = int(obs.metadata.get("fatal_errors", 0))
+    score = float(obs.score)
+    fatal_errors = int(obs.fatal_errors)
 
     return score, total_reward, steps, fatal_errors
 

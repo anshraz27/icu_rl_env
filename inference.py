@@ -1,159 +1,210 @@
-import os
-import sys
-import argparse
-from dotenv import load_dotenv
-
-load_dotenv()
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from openai import OpenAI
-from test_env.client import ICUEnv
-from test_env.models import ICUAction
-
-
-# ---------------- SYSTEM PROMPT ----------------
-
-SYSTEM_PROMPT = """You are an ICU triage decision-making agent.
-
-Your goal is to maximize patient survival and minimize deaths.
-
-You must choose ONE action at every step:
-- 0 → wait (do nothing)
-- 1..k → admit the patient at index (1-based)
-
-CRITICAL RULES (STRICT):
-
-1. NEVER leave critical patients (severity 4 or 5) waiting if a bed is available.
-2. Waiting is dangerous — patients lose survival probability every step.
-3. If beds are available AND patients exist → you SHOULD admit someone.
-4. Always prioritize patients with higher severity.
-5. Avoid admitting low severity patients (1–2) if higher severity patients are waiting.
-6. Long waiting queues lead to penalties — act quickly.
-7. Doing nothing (action=0) is only acceptable if:
-   - there are NO patients, OR
-   - there are NO available beds.
-
-STRATEGY:
-- Prefer severity 5 > 4 > 3 > 2 > 1
-- Admit the most critical patient first
-- Do not delay decisions
-
-OUTPUT FORMAT (STRICT):
-- Return ONLY a single integer
-- No explanation, no text
-- Example outputs: 0, 1, 2, 3
-
-Your decision directly impacts survival — act decisively.
+"""
+Inference Script for ICU Triage Environment (Client-Server Mode)
+================================================================
+Runs the LLM agent against the OpenEnv server using the custom ICUEnv client.
 """
 
+import os
+import json
+import textwrap
+import argparse
+from openai import OpenAI
 
-# ---------------- BUILD PROMPT ----------------
+# Import your custom client and models
+from test_env.client import ICUEnv
+from test_env.models import AssignBedAction, StepDownAction
+from dotenv import load_dotenv
 
-def build_prompt(obs):
+# Load environment variables from a .env file (project root)
+load_dotenv()
 
-    patient_desc = []
-    for i, p in enumerate(obs.patients):
-        patient_desc.append(
-            f"{i+1}: severity={p.severity}, wait={p.wait_time}"
-        )
+# Hackathon required variables
+API_BASE_URL = "https://api.groq.com/openai/v1"
+# Prefer HF_TOKEN if present, otherwise fall back to GROQ_API_KEY
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("GROQ_API_KEY")
+# Use a currently supported Groq model by default (can override via MODEL_NAME env var)
+MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
+MAX_STEPS = 15
+TEMPERATURE = 0.0 # Deterministic scores for reproducibility
 
-    parts = [
-    f"Time step: {obs.time_step}",
-    f"Available beds: {obs.available_beds}",
-    f"Patients waiting: {len(obs.patients)}",
-    "",
-    "Patients (index: severity, wait_time):",
-    "\n".join(patient_desc) if patient_desc else "No patients",
-   ]
+SYSTEM_PROMPT = textwrap.dedent(
+    """
+    You are the Chief Medical Triage AI for a hospital ICU.
+    Your goal is to clear the 'Unassigned Patients' queue by assigning them to appropriate beds.
+    
+    CLINICAL RULES:
+    1. Minors (age < 18) must go to the PICU.
+    2. Infectious patients MUST go to an Isolation ICU bed (negative pressure).
+    3. Head injury patients MUST go to the Neuro ICU.
+    4. Trauma patients MUST go to the Trauma ICU.
+    5. Ventilator-dependent patients MUST be assigned a bed with a ventilator.
+    6. Paralyzed patients MUST be assigned a bed with a specialty mattress.
+    
+    CAPACITY RULES:
+    If no beds are available that meet a critical patient's needs, you MUST use the STEP_DOWN action 
+    on a currently admitted patient to free up their bed. 
+    You can ONLY step down a patient if: GCS is 14+, they do not need a ventilator, and Days in ICU >= 3.
+    
+    OUTPUT FORMAT:
+    You must output ONLY a valid JSON object representing your action. Do not include markdown formatting.
+    
+    Format for Assigning a Bed:
+    {"action_type": "ASSIGN_BED", "patient_id": "PT-01", "bed_id": "S1"}
+    
+    Format for Stepping Down a stable patient to free a bed:
+    {"action_type": "STEP_DOWN", "patient_id": "PT-04"}
+    """
+).strip()
 
-    if obs.metadata.get("feedback"):
-        parts += ["", f"Feedback: {obs.metadata['feedback']}"]
 
-    if obs.metadata.get("hint"):
-        parts += ["", f"Hint: {obs.metadata['hint']}"]
+def build_user_prompt(step: int, observation, full_state) -> str:
+    """Formats the environment observation into a clear text prompt for the LLM."""
+    
+    unassigned_str = "\n".join(
+        f"- ID: {p.patient_id} | Age: {p.age} | GCS: {p.gcs_score} | Vent: {p.needs_ventilator} | "
+        f"Infectious: {p.is_infectious} | Head Trauma: {p.has_severe_head_injury} | Paralysis: {p.has_paralysis}"
+        for p in observation.unassigned_patients
+    ) if observation.unassigned_patients else "None"
 
-    parts += ["", "Choose action (0 = wait, 1..k = admit):"]
+    # full_state is a dict returned by client2._parse_state, so
+    # active_patients entries are plain dicts, not Pydantic models.
+    active_patients = {}
+    if isinstance(full_state, dict):
+        active_patients = full_state.get("active_patients") or {}
 
-    return "\n".join(parts)
+    active_str = "\n".join(
+        f"- ID: {p.get('patient_id')} | GCS: {p.get('gcs_score')} | "
+        f"Vent: {p.get('needs_ventilator')} | Days in ICU: {p.get('days_in_icu')}"
+        for p in active_patients.values()
+    ) if active_patients else "None"
+
+    prompt = textwrap.dedent(
+        f"""
+        Step: {step}
+        
+        --- HOSPITAL STATUS ---
+        {observation.hospital_summary}
+        
+        --- UNASSIGNED PATIENTS (WAITING ROOM) ---
+        {unassigned_str}
+        
+        --- ACTIVE PATIENTS IN BEDS (CANDIDATES FOR STEP-DOWN) ---
+        {active_str}
+        
+        --- PREVIOUS ACTION FEEDBACK ---
+        {observation.feedback}
+        
+        --- SYSTEM HINT ---
+        {getattr(observation, 'hint', '')}
+        
+        Based on the current state, output your next JSON action.
+        """
+    ).strip()
+    return prompt
 
 
-# ---------------- RUN EPISODE ----------------
+def parse_model_action(response_text: str):
+    """Safely parses the LLM's JSON string into a Pydantic Action Model."""
+    try:
+        clean_text = response_text.replace("```json", "").replace("```", "").strip()
+        action_dict = json.loads(clean_text)
+        
+        if action_dict.get("action_type") == "ASSIGN_BED":
+            return AssignBedAction(**action_dict)
+        elif action_dict.get("action_type") == "STEP_DOWN":
+            return StepDownAction(**action_dict)
+        else:
+            raise ValueError("Unknown action_type in JSON.")
+            
+    except Exception as e:
+        print(f"Failed to parse LLM output: {response_text}. Error: {e}")
+        return StepDownAction(action_type="STEP_DOWN", patient_id="PARSE_ERROR")
 
-def run_episode(env, client, verbose=True):
 
+def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
+    """Runs a single episode via the EnvClient and returns the final score."""
+    print(f"\n{'='*40}")
+    print(f"Starting Episode {episode_num}")
+    print(f"{'='*40}")
+    
+    # reset() on the client returns a StepResult wrapper
     result = env.reset()
     obs = result.observation
+    
+    for step in range(1, MAX_STEPS + 1):
+        if result.done:
+            break
 
-    total_reward = 0.0
-
-    while not result.done:
-        prompt = build_prompt(obs)
-
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.0,
-            max_tokens=5,
-        )
+        # Note: env.state() is now a method call on the client
+        current_state = env.state()
+        user_prompt = build_user_prompt(step, obs, current_state)
+        
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
 
         try:
-            action_val = int(response.choices[0].message.content.strip())
-        except:
-            action_val = 0  # fallback
-
-        if verbose:
-            print(f"Action chosen: {action_val}")
-
-        result = env.step(ICUAction(value=action_val))
-        obs = result.observation
-
-        total_reward += result.reward or 0.0
-
-        if verbose:
-            reward_val = result.reward or 0.0
-            score_val = obs.metadata.get('score')
-            if score_val is None:
-                score_val = reward_val  # Fallback to reward, as upd_env.py sets reward = score
-            
-            print(
-                f"Reward: {reward_val:.3f} | "
-                f"Score: {score_val:.3f}"
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                temperature=TEMPERATURE,
+                response_format={"type": "json_object"} 
             )
+            response_text = completion.choices[0].message.content or ""
+        except Exception as exc:
+            print(f"API Request failed: {exc}")
+            # End the episode gracefully if the LLM call fails
+            break
 
-    final_score = obs.metadata.get("score")
-    if final_score is None:
-        final_score = result.reward or 0.0
+        action_model = parse_model_action(response_text)
+        print(f"Step {step} LLM Action: {action_model.model_dump()}")
+        
+        # step() on the client returns a StepResult wrapper
+        result = env.step(action_model)
+        obs = result.observation
+        
+        print(f"Reward: {result.reward:+.2f} | Done: {result.done} | Feedback: {obs.feedback}")
 
-    print(f"\nFinal Score: {final_score:.3f}")
+    final_score = obs.score
+    print(f"Episode {episode_num} Complete. Final Score: {final_score}")
     return final_score
 
 
-# ---------------- MAIN ----------------
-
-def main():
-
+def main() -> None:
+    # 1. Parse URL from command line
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="http://localhost:8000")
+    parser.add_argument("--url", default="http://localhost:8001", help="URL of the OpenEnv server")
     args = parser.parse_args()
 
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        print("Set GROQ_API_KEY first")
+    # 2. Ensure credentials are set
+    if not API_KEY:
+        print("Error: API Key not found. Please set HF_TOKEN or GROQ_API_KEY.")
         return
+        
+    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.groq.com/openai/v1"
-    )
+    baseline_scores = []
 
-    print("\nICU Environment - LLM Agent\n")
-
+    # 3. Initialize the Custom Environment Client in synchronous mode.
+    # .sync() wraps the async EnvClient methods so reset/step/state are
+    # regular blocking calls returning StepResult objects.
     with ICUEnv(base_url=args.url).sync() as env:
-        run_episode(env, client)
+        # Run 3 consecutive episodes.
+        # (reset() in env2 automatically cycles easy -> medium -> hard)
+        for i in range(1, 4):
+            score = run_episode(llm_client, env, i)
+            baseline_scores.append(score)
+
+    print("\n\n" + "="*40)
+    print("OPENENV BASELINE EVALUATION RESULTS")
+    print("="*40)
+    for i, score in enumerate(baseline_scores, 1):
+        print(f"Episode {i}: {score:.2f} / 1.00")
+    
+    if baseline_scores:
+        average_score = sum(baseline_scores) / len(baseline_scores)
+        print(f"\nOverall Baseline Average: {average_score:.2f}")
 
 
 if __name__ == "__main__":

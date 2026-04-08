@@ -1,6 +1,6 @@
 from typing import List, Dict
 from openenv.core.env_server.interfaces import Environment
-from models2 import (
+from models import (
     PatientState, BedState, WardState, 
     AssignBedAction, StepDownAction, ICUAction, ICUObservation
 )

@@ -6,7 +6,7 @@
 
 """ICU Bed Allocation environment client."""
 
-from typing import Dict
+from typing import Dict, Any
 import sys
 from pathlib import Path
 
@@ -18,47 +18,38 @@ repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-try:
-    from .models import ICUAction, ICUObservation, ICUState, Patient
-except ImportError:
-    from test_env.models import ICUAction, ICUObservation, ICUState
+# Use the v2 models (models2) so the client matches env2/app2 schemas.
+from .models import ICUAction, ICUObservation
 
 
-class ICUEnv(EnvClient[ICUAction, ICUObservation, ICUState]):
+# We use Dict[str, Any] for the State type because our new environment's 
+# @property def state(self) returns a complex tracking dictionary.
+class ICUEnv(EnvClient[ICUAction, ICUObservation, Dict[str, Any]]):
 
     # ---------------- STEP PAYLOAD ----------------
 
     def _step_payload(self, action: ICUAction) -> dict:
-        return {
-            "value": action.value
-        }
+        # Convert the Pydantic Action model (AssignBedAction or StepDownAction)
+        # directly into a dictionary payload for the environment server.
+        return action.model_dump()
 
     # ---------------- PARSE RESULT ----------------
 
     def _parse_result(self, payload: dict) -> StepResult:
-        obs_data = payload.get("observation", {})
-        done = payload.get("done", False)
-        reward = payload.get("reward", 0.0)
+        obs_data = payload.get("observation", {}) or {}
+        # In the OpenEnv HTTP schema, reward/done
+        # are surfaced at the top level of the response, not inside the
+        # observation object.
+        reward = payload.get("reward", obs_data.get("reward", 0.0))
+        done = payload.get("done", obs_data.get("done", False))
 
-        # Parse patients list safely
-        patients = [
-            Patient(
-                id=p.get("id", 0),
-                severity=p.get("severity", 1),
-                wait_time=p.get("wait_time", 0),
-                survival_prob=p.get("survival_prob", 1.0),
-            )
-            for p in obs_data.get("patients", [])
-        ]
+        merged = {
+            **obs_data,
+            "reward": reward,
+            "done": done,
+        }
 
-        observation = ICUObservation(
-            patients=patients,
-            available_beds=obs_data.get("available_beds", 0),
-            time_step=obs_data.get("time_step", 0),
-            reward=reward,
-            done=done,
-            metadata=obs_data.get("metadata", {}),
-        )
+        observation = ICUObservation(**merged)
 
         return StepResult(
             observation=observation,
@@ -68,11 +59,7 @@ class ICUEnv(EnvClient[ICUAction, ICUObservation, ICUState]):
 
     # ---------------- PARSE STATE ----------------
 
-    def _parse_state(self, payload: dict) -> ICUState:
-        return ICUState(
-            episode_id=payload.get("episode_id"),
-            step_count=payload.get("step_count", 0),
-            total_patients=payload.get("total_patients", 0),
-            total_admitted=payload.get("total_admitted", 0),
-            deaths=payload.get("deaths", 0),
-        )
+    def _parse_state(self, payload: dict) -> Dict[str, Any]:
+        # The new environment state returns the unassigned_patients, 
+        # active_patients registry, and ward capacity as a structured dict.
+        return payload

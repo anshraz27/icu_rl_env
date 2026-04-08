@@ -6,6 +6,6 @@
 
 """ICU environment server components."""
 
-from .upd_env import ICUEnvironment
+from .env2 import ICUEnvironment
 
 __all__ = ["ICUEnvironment"]

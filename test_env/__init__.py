@@ -1,10 +1,21 @@
 from .client import ICUEnv
-from .models import ICUAction, ICUObservation, ICUState, Patient
+from .models import (
+    ICUAction, 
+    ICUObservation, 
+    PatientState, 
+    BedState, 
+    WardState, 
+    AssignBedAction, 
+    StepDownAction
+)
 
 __all__ = [
     "ICUEnv",
     "ICUAction",
     "ICUObservation",
-    "ICUState",
-    "Patient",
+    "PatientState",
+    "BedState",
+    "WardState",
+    "AssignBedAction",
+    "StepDownAction",
 ]

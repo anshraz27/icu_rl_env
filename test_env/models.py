@@ -1,48 +1,75 @@
-from typing import List, Dict, Any, Optional
-from openenv.core.env_server.types import Action, Observation, State
-from pydantic import BaseModel, Field
+from typing import List, Dict, Optional, Literal, Union, Any
+from pydantic import BaseModel
+
+# ==========================================
+# STATE MODELS
+# ==========================================
+
+class PatientState(BaseModel):
+    patient_id: str
+    age: int
+    gcs_score: int
+    needs_ventilator: bool
+    is_infectious: bool
+    has_severe_head_injury: bool
+    has_paralysis: bool
+    days_in_icu: int
+
+class BedState(BaseModel):
+    bed_id: str
+    has_ventilator: bool
+    is_negative_pressure: bool
+    has_specialized_mattress: bool
+    current_occupant_id: Optional[str] = None  
+
+class WardState(BaseModel):
+    ward_name: str
+    total_beds: int
+    beds: List[BedState]
 
 
-# --------------- action -----------
+# ==========================================
+# ACTION MODELS (The Agent's Tools)
+# ==========================================
 
-class ICUAction(Action, BaseModel):
-    """Action for the ICU environment.
+class AssignBedAction(BaseModel):
+    action_type: Literal["ASSIGN_BED"]
+    patient_id: str
+    bed_id: str
 
-    0  -> wait
-    1+ -> admit patient at index (value - 1)
-    """
+class StepDownAction(BaseModel):
+    action_type: Literal["STEP_DOWN"]
+    patient_id: str
 
-    value: int = Field(..., ge=0)
+# The Union type that OpenEnv uses to validate incoming actions
+ICUAction = Union[AssignBedAction, StepDownAction]
+
+class ICUActionRouter(BaseModel):
+    """Adapter model so OpenEnv's HTTP/WebSocket server can validate actions."""
+    
+    @classmethod
+    def model_validate(cls, data: Any, *args: Any, **kwargs: Any) -> ICUAction:  # type: ignore[override]
+        action_type = (data or {}).get("action_type")
+
+        if action_type == "ASSIGN_BED":
+            return AssignBedAction(**data)
+        if action_type == "STEP_DOWN":
+            return StepDownAction(**data)
+
+        raise ValueError(f"Unknown action_type: {action_type!r}")
 
 
-# --------------- patient -----------
+# ==========================================
+# OBSERVATION MODEL (What the Agent Sees)
+# ==========================================
 
-class Patient(BaseModel):
-    id: int
-    severity: int = Field(..., ge=1, le=5)
-    wait_time: int = Field(..., ge=0)
-    survival_prob: float = Field(..., ge=0.0, le=1.0)
-
-
-# --------------- observation -----------
-
-class ICUObservation(Observation, BaseModel):
-    patients: List[Patient] = Field(default_factory=list)
-    available_beds: int = Field(..., ge=0)
-    time_step: int = Field(..., ge=0)
-
+class ICUObservation(BaseModel):
+    hospital_summary: str
+    unassigned_patients: List[PatientState]
+    feedback: str
     reward: float
+    hint: str
     done: bool
-
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-# --------------- state -----------
-
-class ICUState(State, BaseModel):
-    episode_id: Optional[str]
-    step_count: int = Field(..., ge=0)
-
-    total_patients: int = Field(..., ge=0)
-    total_admitted: int = Field(..., ge=0)
-    deaths: int = Field(..., ge=0)
+    score: float
+    step: int
+    fatal_errors: int
