@@ -37,8 +37,13 @@ TASKS = {
             {"id": "PT-05", "age": 65, "gcs": 7, "vent": True, "inf": False, "head": False, "para": False, "days": 0}
         ],
         "active_occupants": [
-            # This is the "Dummy" patient currently occupying the bed
-            {"id": "PT-06", "age": 50, "gcs": 15, "vent": False, "inf": False, "head": False, "para": False, "days": 5, "bed_id": "S1"}
+            # Occupy ALL ventilator beds so PT-05 has nowhere to go without a step-down
+            {"id": "PT-06", "age": 50, "gcs": 15, "vent": False, "inf": False, "head": False, "para": False, "days": 5, "bed_id": "S1"},
+            {"id": "PT-07", "age": 40, "gcs": 9, "vent": True, "inf": False, "head": False, "para": False, "days": 1, "bed_id": "P1"},
+            {"id": "PT-08", "age": 35, "gcs": 10, "vent": True, "inf": False, "head": False, "para": False, "days": 2, "bed_id": "I1"},
+            {"id": "PT-09", "age": 55, "gcs": 8, "vent": True, "inf": False, "head": False, "para": False, "days": 1, "bed_id": "N1"},
+            {"id": "PT-10", "age": 28, "gcs": 11, "vent": True, "inf": False, "head": False, "para": False, "days": 1, "bed_id": "T1"},
+            {"id": "PT-11", "age": 33, "gcs": 9, "vent": True, "inf": False, "head": False, "para": False, "days": 2, "bed_id": "T2"},
         ]
     }
 }
@@ -51,8 +56,10 @@ class ICUEnvironment(Environment):
     def __init__(self, task_id: str = "easy"):
         if task_id not in TASKS:
             raise ValueError(f"Unknown task_id: {task_id}")
-        self.task_id = task_id
         self.max_steps = 20
+        # Pre-set task_counter so reset() starts from the requested task
+        task_keys = list(TASKS.keys())
+        self.task_counter = task_keys.index(task_id)
         self.reset()
 
     # ---------------- RESET (Now completely data-driven) ----------------
@@ -140,6 +147,8 @@ class ICUEnvironment(Environment):
                 reward += self._assign(action)
             elif action.action_type == "STEP_DOWN":
                 reward += self._step_down(action)
+            else:
+                raise ValueError(f"Unknown action_type: {action.action_type!r}. Use ASSIGN_BED or STEP_DOWN.")
         except Exception as e:
             reward -= 0.5
             self.fatal_errors += 1
@@ -150,13 +159,19 @@ class ICUEnvironment(Environment):
 
         self.cumulative_reward += reward
 
-        if not self.unassigned_patients and self.fatal_errors == 0:
-            reward += 1.0
+        # Check success FIRST — if all patients assigned, episode ends as a win
+        if not self.unassigned_patients:
+            error_penalty = self.fatal_errors * 0.25
+            bonus = max(0.1, 1.0 - error_penalty)
+            reward += bonus
+            self.cumulative_reward += bonus  # Include bonus in score calculation
             self.done = True
-            feedback = "SUCCESS: Shift completed safely."
-
-        # Fail state check
-        if self.time >= self.max_steps or self.fatal_errors >= 3:
+            if self.fatal_errors == 0:
+                feedback = "SUCCESS: Shift completed safely."
+            else:
+                feedback = f"COMPLETED: All patients assigned, but with {self.fatal_errors} clinical error(s)."
+        # Only check fail state if not already succeeded
+        elif self.time >= self.max_steps or self.fatal_errors >= 3:
             self.done = True
             feedback = "FAILED: Shift ended or too many clinical errors."
 
@@ -280,7 +295,7 @@ class ICUEnvironment(Environment):
             hint = (
                 "HINT: You are violating clinical constraints. Check if the patient "
                 "needs a ventilator, isolation, or a specialty mattress. If all beds are full, "
-                "you must use the STEP_DOWN action on a stable patient (GCS 14+, Days > 3) to free a bed."
+                "you must use the STEP_DOWN action on a stable patient (GCS 14+, not on ventilator) to free a bed."
             )
 
         # The Clamped Score

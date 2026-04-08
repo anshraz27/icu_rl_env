@@ -187,9 +187,9 @@ def run_episode(
         total_reward += obs.reward or 0.0
         steps += 1
 
-    # Primary signal: score from metadata (as designed in env2)
-    score = float(obs.metadata.get("score", 0.0) or 0.0)
-    fatal_errors = int(obs.metadata.get("fatal_errors", 0))
+    # Primary signal: direct attributes on ICUObservation
+    score = float(obs.score)
+    fatal_errors = int(obs.fatal_errors)
 
     return score, total_reward, steps, fatal_errors
 

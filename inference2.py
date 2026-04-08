@@ -24,26 +24,28 @@ API_BASE_URL = "https://api.groq.com/openai/v1"
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("GROQ_API_KEY")
 # Use a currently supported Groq model by default (can override via MODEL_NAME env var)
 MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
-MAX_STEPS = 15
+MAX_STEPS = 20  # Match env2.py max_steps so the agent uses all available steps
 TEMPERATURE = 0.0 # Deterministic scores for reproducibility
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
     You are the Chief Medical Triage AI for a hospital ICU.
     Your goal is to clear the 'Unassigned Patients' queue by assigning them to appropriate beds.
-    
-    CLINICAL RULES:
-    1. Minors (age < 18) must go to the PICU.
-    2. Infectious patients MUST go to an Isolation ICU bed (negative pressure).
-    3. Head injury patients MUST go to the Neuro ICU.
-    4. Trauma patients MUST go to the Trauma ICU.
-    5. Ventilator-dependent patients MUST be assigned a bed with a ventilator.
-    6. Paralyzed patients MUST be assigned a bed with a specialty mattress.
-    
+
+    CLINICAL RULES (these are enforced — violating them causes a fatal error):
+    1. Ventilator-dependent patients MUST be assigned a bed WITH a ventilator.
+    2. Infectious patients MUST be assigned a bed WITH negative pressure isolation.
+    3. Paralyzed patients MUST be assigned a bed WITH a specialty mattress.
+
+    SOFT PREFERENCES (not enforced, but good practice):
+    - Minors (age < 18) prefer the PICU ward.
+    - Head injury patients prefer the Neuro ICU ward.
+    - Consider ward specializations when multiple valid beds exist.
+
     CAPACITY RULES:
-    If no beds are available that meet a critical patient's needs, you MUST use the STEP_DOWN action 
-    on a currently admitted patient to free up their bed. 
-    You can ONLY step down a patient if: GCS is 14+, they do not need a ventilator, and Days in ICU >= 3.
+    If no beds are available that meet a critical patient's needs, you MUST use the STEP_DOWN action
+    on a currently admitted patient to free up their bed.
+    You can ONLY step down a patient if: GCS is 14+ and they do not need a ventilator.
     
     OUTPUT FORMAT:
     You must output ONLY a valid JSON object representing your action. Do not include markdown formatting.
@@ -104,21 +106,25 @@ def build_user_prompt(step: int, observation, full_state) -> str:
 
 
 def parse_model_action(response_text: str):
-    """Safely parses the LLM's JSON string into a Pydantic Action Model."""
+    """Safely parses the LLM's JSON string into a Pydantic Action Model.
+
+    Returns None if the output cannot be parsed, so the caller can skip
+    the step instead of sending a guaranteed-failure action to the env.
+    """
     try:
         clean_text = response_text.replace("```json", "").replace("```", "").strip()
         action_dict = json.loads(clean_text)
-        
+
         if action_dict.get("action_type") == "ASSIGN_BED":
             return AssignBedAction(**action_dict)
         elif action_dict.get("action_type") == "STEP_DOWN":
             return StepDownAction(**action_dict)
         else:
             raise ValueError("Unknown action_type in JSON.")
-            
+
     except Exception as e:
         print(f"Failed to parse LLM output: {response_text}. Error: {e}")
-        return StepDownAction(action_type="STEP_DOWN", patient_id="PARSE_ERROR")
+        return None
 
 
 def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
@@ -126,11 +132,15 @@ def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
     print(f"\n{'='*40}")
     print(f"Starting Episode {episode_num}")
     print(f"{'='*40}")
-    
+
     # reset() on the client returns a StepResult wrapper
     result = env.reset()
     obs = result.observation
-    
+
+    # Keep conversation history so the LLM can learn from previous
+    # actions and mistakes within the same episode.
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
     for step in range(1, MAX_STEPS + 1):
         if result.done:
             break
@@ -138,18 +148,15 @@ def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
         # Note: env.state() is now a method call on the client
         current_state = env.state()
         user_prompt = build_user_prompt(step, obs, current_state)
-        
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
+
+        messages.append({"role": "user", "content": user_prompt})
 
         try:
             completion = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=messages,
                 temperature=TEMPERATURE,
-                response_format={"type": "json_object"} 
+                response_format={"type": "json_object"}
             )
             response_text = completion.choices[0].message.content or ""
         except Exception as exc:
@@ -157,13 +164,20 @@ def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
             # End the episode gracefully if the LLM call fails
             break
 
+        # Record the LLM's response in history so it knows what it tried
+        messages.append({"role": "assistant", "content": response_text})
+
         action_model = parse_model_action(response_text)
+        if action_model is None:
+            print(f"Step {step}: Skipping — could not parse LLM output.")
+            continue
+
         print(f"Step {step} LLM Action: {action_model.model_dump()}")
-        
+
         # step() on the client returns a StepResult wrapper
         result = env.step(action_model)
         obs = result.observation
-        
+
         print(f"Reward: {result.reward:+.2f} | Done: {result.done} | Feedback: {obs.feedback}")
 
     final_score = obs.score

@@ -234,7 +234,7 @@ def run_grader(steps: int = 100):
 
 	Randomly assigns waiting patients to empty beds when possible,
 	otherwise attempts random safe step-downs. Returns score, reward,
-	and basic metadata derived from ICUObservation.metadata.
+	and basic metadata from the ICUObservation.
 	"""
 
 	import random
@@ -255,7 +255,7 @@ def run_grader(steps: int = 100):
 
 		empty_beds = _list_empty_beds(wards)
 
-		action: ICUActionRouter
+		action = None
 
 		# Randomly assign if there is someone waiting and free beds
 		if unassigned and empty_beds:
@@ -313,7 +313,11 @@ def run_baseline():
 
 	total_reward = 0.0
 
-	while not obs.done:
+	max_iterations = 50  # Safety guard against infinite loops
+	for _ in range(max_iterations):
+		if obs.done:
+			break
+
 		state = env.state
 		unassigned: List[PatientState] = state["unassigned_patients"]
 		active = state["active_patients"]
@@ -321,7 +325,7 @@ def run_baseline():
 
 		empty_beds = _list_empty_beds(wards)
 
-		action: ICUActionRouter 
+		action = None
 
 		# 1) Try to find a feasible assignment first
 		if unassigned and empty_beds:
