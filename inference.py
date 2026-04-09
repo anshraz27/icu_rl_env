@@ -18,11 +18,9 @@ from dotenv import load_dotenv
 # Load environment variables from a .env file (project root)
 load_dotenv()
 
-# Hackathon required variables
-API_BASE_URL = "https://api.groq.com/openai/v1"
-# Prefer HF_TOKEN if present, otherwise fall back to GROQ_API_KEY
+
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1") 
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("GROQ_API_KEY")
-# Use a currently supported Groq model by default (can override via MODEL_NAME env var)
 MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
 MAX_STEPS = 15
 TEMPERATURE = 0.0 # Deterministic scores for reproducibility
