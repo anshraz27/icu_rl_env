@@ -42,3 +42,4 @@ outputs/
 .agents/
 .history/
 .lock
+test_env/validate-submission.sh

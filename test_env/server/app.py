@@ -11,7 +11,6 @@ from typing import List
 from fastapi.responses import JSONResponse, HTMLResponse
 from openenv.core.env_server import create_fastapi_app
 from dotenv import load_dotenv
-os.environ["ENABLE_WEB_INTERFACE"]= "true"
 load_dotenv(override=True)
 # Fix import path so "test_env" and siblings are importable when run directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
