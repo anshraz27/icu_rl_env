@@ -288,6 +288,10 @@ class ICUEnvironment(Environment):
             final_score = 0.0
         else:
             final_score = _clamp(self.cumulative_reward)
+            if final_score == 0.0:
+                final_score = 0.01
+            if final_score == 1.0:
+                final_score = 0.99
 
         return ICUObservation(
             hospital_summary=self._summary(),
