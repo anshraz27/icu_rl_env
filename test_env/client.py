@@ -18,7 +18,6 @@ repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-# Use the v2 models (models2) so the client matches env2/app2 schemas.
 from .models import ICUAction, ICUObservation
 
 
