@@ -6,10 +6,10 @@
 # Stage 1: Builder
 # Resolves dependencies and prepare the virtual environment
 FROM python:3.11.9-slim AS builder
+
+WORKDIR /app
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
-WORKDIR /app
-
 # Install uv for lightning-fast, reproducible dependency management
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
     curl -LsSf https://astral.sh/uv/install.sh | sh && \
@@ -37,7 +37,7 @@ RUN .venv/bin/openenv validate
 
 # Stage 2: Runtime
 # Minimal final image containing only the application and its dependencies
-FROM python:3.10-slim
+FROM python:3.11.9-slim
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
