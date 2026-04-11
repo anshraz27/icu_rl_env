@@ -11,8 +11,12 @@ import argparse
 from openai import OpenAI
 
 # Import your custom client and models
-from test_env.client import ICUEnv
-from test_env.models import AssignBedAction, StepDownAction
+try:
+    from client import ICUEnv
+    from models import AssignBedAction, StepDownAction
+except ImportError:
+    from test_env.client import ICUEnv
+    from test_env.models import AssignBedAction, StepDownAction
 from dotenv import load_dotenv
 
 # Load environment variables from a .env file (project root)
