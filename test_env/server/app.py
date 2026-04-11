@@ -254,7 +254,7 @@ def run_baseline():
 def main():
 	import uvicorn
 
-	port = int(os.environ.get("PORT", 8001))
+	port = int(os.environ.get("PORT", 7860))
 	host = os.environ.get("HOST", "0.0.0.0")
 
 	# Note: using app2:app so it doesn't clash with server.app

@@ -180,7 +180,7 @@ def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
 def main() -> None:
     # 1. Parse URL from command line
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="http://localhost:8001", help="URL of the OpenEnv server")
+    parser.add_argument("--url", default=os.environ.get("OPENENV_BASE_URL", "http://127.0.0.1:7860"), help="URL of the OpenEnv server")
     args = parser.parse_args()
 
     # 2. Ensure credentials are set
