@@ -18,7 +18,7 @@ repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from .models import ICUAction, ICUObservation
+from models import ICUAction, ICUObservation
 
 
 # We use Dict[str, Any] for the State type because our new environment's 

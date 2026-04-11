@@ -5,18 +5,22 @@ Runs the LLM agent against the OpenEnv server using the custom ICUEnv client.
 """
 
 import os
+import sys
 import json
 import textwrap
 import argparse
 from openai import OpenAI
 
+# Ensure current directory is in sys.path for local/remote compatibility
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 # Import your custom client and models
-try:
-    from client import ICUEnv
-    from models import AssignBedAction, StepDownAction
-except ImportError:
-    from test_env.client import ICUEnv
-    from test_env.models import AssignBedAction, StepDownAction
+
+from client import ICUEnv
+from models import AssignBedAction, StepDownAction
+
 from dotenv import load_dotenv
 
 # Load environment variables from a .env file (project root)
