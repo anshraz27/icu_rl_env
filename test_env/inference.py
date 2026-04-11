@@ -129,13 +129,16 @@ def parse_model_action(response_text: str):
 
 def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
     """Runs a single episode via the EnvClient and returns the final score."""
-    print(f"\n{'='*40}")
-    print(f"Starting Episode {episode_num}")
-    print(f"{'='*40}")
+    task_name = f"icu_triage_{episode_num}"
+    env_name = "icu_env"
+    print(f"[START] task={task_name} env={env_name} model={MODEL_NAME}", flush=True)
     
     # reset() on the client returns a StepResult wrapper
     result = env.reset()
     obs = result.observation
+    
+    rewards = []
+    steps_taken = 0
     
     for step in range(1, MAX_STEPS + 1):
         if result.done:
@@ -150,6 +153,7 @@ def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
             {"role": "user", "content": user_prompt},
         ]
 
+        error = None
         try:
             completion = client.chat.completions.create(
                 model=MODEL_NAME,
@@ -159,21 +163,36 @@ def run_episode(client: OpenAI, env: ICUEnv, episode_num: int) -> float:
             )
             response_text = completion.choices[0].message.content or ""
         except Exception as exc:
-            print(f"API Request failed: {exc}")
-            # End the episode gracefully if the LLM call fails
-            break
+            error = str(exc)
+            response_text = ""
 
         action_model = parse_model_action(response_text)
-        print(f"Step {step} LLM Action: {action_model.model_dump()}")
+        action_str = json.dumps(action_model.model_dump()).replace(" ", "")
         
-        # step() on the client returns a StepResult wrapper
-        result = env.step(action_model)
-        obs = result.observation
+        try:
+            result = env.step(action_model)
+            obs = result.observation
+            reward = result.reward
+            done = result.done
+        except Exception as step_exc:
+            error = str(step_exc)
+            reward = 0.0
+            done = True
+            
+        rewards.append(reward)
+        steps_taken = step
         
-        print(f"Reward: {result.reward:+.2f} | Done: {result.done} | Feedback: {obs.feedback}")
+        error_val = error if error else "null"
+        done_val = str(done).lower()
+        print(f"[STEP] step={step} action={action_str} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
+
+        if error and not response_text:
+            break
 
     final_score = obs.score
-    print(f"Episode {episode_num} Complete. Final Score: {final_score}")
+    success = final_score > 0.0
+    rewards_str = ",".join([f"{r:.2f}" for r in rewards])
+    print(f"[END] success={str(success).lower()} steps={steps_taken} score={final_score:.3f} rewards={rewards_str}", flush=True)
     return final_score
 
 
