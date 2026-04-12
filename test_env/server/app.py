@@ -33,25 +33,203 @@ from server.env2 import ICUEnvironment
 app = create_fastapi_app(ICUEnvironment, ICUActionRouter, ICUObservation)
 
 # ---------------- ROOT ----------------
+import textwrap
+from fastapi.responses import HTMLResponse
 
 @app.get("/")
 def root():
-	return JSONResponse(
-		content={
-			"name": "ICU Bed Allocation Environment v2",
-			"version": "1.0.0",
-			"status": "running",
-			"description": "Structured ICU triage environment with bed assignment and step-down logic.",
-			"endpoints": {
-				"health": "/health",
-				"docs": "/docs",
-				"tasks": "/tasks",
-				"grader": "/grader",
-				"baseline": "/baseline",
+    html_content = textwrap.dedent("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ICU Dashboard</title>
+        <style>
+            body {
+                font-family: Arial;
+                background: #f5f7fa;
+                margin: 20px;
+            }
 
-			},
-		}
-	)
+            h1 {
+                color: #2c3e50;
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+            }
+
+            .card {
+                background: white;
+                padding: 15px;
+                border-radius: 10px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+            }
+
+            .patient {
+                border-left: 5px solid #3498db;
+                padding: 10px;
+                margin: 10px 0;
+                background: #ecf5ff;
+            }
+
+            .critical {
+                border-left-color: red;
+                background: #ffecec;
+            }
+
+            .medium {
+                border-left-color: orange;
+            }
+
+            button {
+                padding: 8px 12px;
+                margin-top: 5px;
+                border: none;
+                background: #3498db;
+                color: white;
+                border-radius: 5px;
+                cursor: pointer;
+            }
+
+            button:hover {
+                background: #2980b9;
+            }
+
+            input {
+                padding: 5px;
+                margin: 5px 0;
+            }
+
+            pre {
+                background: #1e1e1e;
+                color: #00ffcc;
+                padding: 10px;
+                border-radius: 5px;
+                max-height: 200px;
+                overflow: auto;
+            }
+        </style>
+    </head>
+
+    <body>
+
+        <h1>🏥 ICU Bed Allocation Dashboard</h1>
+
+        <button onclick="resetEnv()">🔄 Reset</button>
+
+        <div class="grid">
+            <div class="card">
+                <h2>🧍 Patients</h2>
+                <div id="patients"></div>
+            </div>
+
+            <div class="card">
+                <h2>🛏️ Available Beds</h2>
+                <div id="beds"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📊 Logs</h2>
+            <pre id="logs">Waiting...</pre>
+        </div>
+
+        <div class="card">
+            <h2>🏁 Run Grader</h2>
+
+            <label>Steps:</label>
+            <input type="number" id="grader-steps" value="50" />
+
+            <br>
+            <button onclick="runGrader()">Run Evaluation</button>
+
+            <h3>Result:</h3>
+            <pre id="grader-output">Not run yet</pre>
+        </div>
+
+        <script>
+            let currentObs = null;
+
+            async function resetEnv() {
+                const res = await fetch('/reset', { method: 'POST' });
+                const data = await res.json();
+                updateUI(data.observation);
+            }
+
+            async function step(action) {
+                const res = await fetch('/step', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ action })   // ✅ FIXED
+                });
+                const data = await res.json();
+                updateUI(data.observation);
+            }
+
+            function updateUI(obs) {
+                currentObs = obs;
+
+                // Patients
+                const patientsDiv = document.getElementById('patients');
+                patientsDiv.innerHTML = "";
+
+                obs.unassigned_patients.forEach((p) => {
+                    let cls = "patient";
+                    if (p.gcs_score < 8) cls += " critical";
+                    else if (p.gcs_score < 12) cls += " medium";
+
+                    patientsDiv.innerHTML += `
+                        <div class="${cls}">
+                            <b>ID:</b> ${p.patient_id}<br>
+                            GCS: ${p.gcs_score} | Vent: ${p.needs_ventilator}<br>
+                            <button onclick="assign('${p.patient_id}')">Assign</button>
+                        </div>
+                    `;
+                });
+
+                // Beds (show full summary)
+                document.getElementById('beds').innerText = obs.hospital_summary;
+
+                // Logs
+                document.getElementById('logs').innerText =
+                    JSON.stringify(obs, null, 2);
+            }
+
+            function assign(patient_id) {
+                step({
+                    action_type: "ASSIGN_BED",
+                    patient_id: patient_id,
+                    bed_id: "S1"   // TODO: make dynamic later
+                });
+            }
+
+            function stepDown(patient_id) {
+                step({
+                    action_type: "STEP_DOWN",
+                    patient_id: patient_id
+                });
+            }
+
+            async function runGrader() {
+                const steps = document.getElementById("grader-steps").value;
+
+                const res = await fetch(`/grader?steps=${steps}`, {
+                    method: "POST"
+                });
+
+                const data = await res.json();
+
+                document.getElementById("grader-output").innerText =
+                    JSON.stringify(data, null, 2);
+            }
+        </script>
+
+    </body>
+    </html>
+    """)
+    return HTMLResponse(content=html_content)
 
 
 

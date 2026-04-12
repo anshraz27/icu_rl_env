@@ -1,5 +1,5 @@
-from typing import List, Dict, Optional, Literal, Union, Any
-from pydantic import BaseModel
+from typing import List, Dict, Optional, Literal, Union, Any, Annotated
+from pydantic import BaseModel, RootModel, Field
 
 # ==========================================
 # STATE MODELS
@@ -42,7 +42,7 @@ class StepDownAction(BaseModel):
     patient_id: str
 
 # The Union type that OpenEnv uses to validate incoming actions
-ICUAction = Union[AssignBedAction, StepDownAction]
+ICUAction = Annotated[Union[AssignBedAction, StepDownAction], Field(discriminator="action_type")]
 
 class ICUActionRouter(BaseModel):
     """Adapter model so OpenEnv's HTTP/WebSocket server can validate actions."""
