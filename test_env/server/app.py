@@ -131,23 +131,40 @@ def web():
             </div>
         </div>
 
-        <div class="card">
-            <h2>📊 Logs</h2>
-            <pre id="logs">Waiting...</pre>
-        </div>
+		<div class="card">
+			<h2>📊 Logs</h2>
+			<pre id="logs">Waiting...</pre>
+		</div>
 
-        <div class="card">
-            <h2>🏁 Run Grader</h2>
+		<div class="card">
+			<h2>🔌 API Controls</h2>
 
-            <label>Steps:</label>
-            <input type="number" id="grader-steps" value="50" />
+			<button onclick="callResetApi()">Call /reset</button>
+			<button onclick="callStepApi()">Call /step</button>
+			<button onclick="callStateApi()">Call /state</button>
 
-            <br>
-            <button onclick="runGrader()">Run Evaluation</button>
+			<h3>/reset response</h3>
+			<pre id="reset-response">Not called yet</pre>
 
-            <h3>Result:</h3>
-            <pre id="grader-output">Not run yet</pre>
-        </div>
+			<h3>/step response</h3>
+			<pre id="step-response">Not called yet</pre>
+
+			<h3>/state response</h3>
+			<pre id="state-response">Not called yet</pre>
+		</div>
+
+		<div class="card">
+			<h2>🏁 Run Grader</h2>
+
+			<label>Steps:</label>
+			<input type="number" id="grader-steps" value="50" />
+
+			<br>
+			<button onclick="runGrader()">Run Evaluation</button>
+
+			<h3>Result:</h3>
+			<pre id="grader-output">Not run yet</pre>
+		</div>
 
         <script>
             let currentObs = null;
@@ -224,6 +241,64 @@ def web():
                 document.getElementById("grader-output").innerText =
                     JSON.stringify(data, null, 2);
             }
+
+			// ---- Explicit API call helpers ----
+
+			async function callResetApi() {
+				try {
+					const res = await fetch('/reset', { method: 'POST' });
+					const data = await res.json();
+					document.getElementById('reset-response').innerText =
+						JSON.stringify(data, null, 2);
+					if (data.observation) {
+						updateUI(data.observation);
+					}
+				} catch (err) {
+					document.getElementById('reset-response').innerText = String(err);
+				}
+			}
+
+			async function callStepApi() {
+				try {
+					if (!currentObs || !currentObs.unassigned_patients || currentObs.unassigned_patients.length === 0) {
+						document.getElementById('step-response').innerText =
+							'No unassigned patients available to create a sample /step action.';
+						return;
+					}
+
+					const patient = currentObs.unassigned_patients[0];
+					const action = {
+						action_type: "ASSIGN_BED",
+						patient_id: patient.patient_id,
+						bed_id: "S1"
+					};
+
+					const res = await fetch('/step', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ action })
+					});
+					const data = await res.json();
+					document.getElementById('step-response').innerText =
+						JSON.stringify(data, null, 2);
+					if (data.observation) {
+						updateUI(data.observation);
+					}
+				} catch (err) {
+					document.getElementById('step-response').innerText = String(err);
+				}
+			}
+
+			async function callStateApi() {
+				try {
+					const res = await fetch('/state');
+					const data = await res.json();
+					document.getElementById('state-response').innerText =
+						JSON.stringify(data, null, 2);
+				} catch (err) {
+					document.getElementById('state-response').innerText = String(err);
+				}
+			}
         </script>
 
     </body>
