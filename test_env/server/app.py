@@ -36,8 +36,8 @@ app = create_fastapi_app(ICUEnvironment, ICUActionRouter, ICUObservation)
 import textwrap
 from fastapi.responses import HTMLResponse
 
-@app.get("/")
-def root():
+@app.get("/web")
+def web():
     html_content = textwrap.dedent("""
     <!DOCTYPE html>
     <html>
@@ -162,7 +162,7 @@ def root():
                 const res = await fetch('/step', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ action })   // ✅ FIXED
+                    body: JSON.stringify({ action })   // FIXED
                 });
                 const data = await res.json();
                 updateUI(data.observation);
